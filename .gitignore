@@ -1,0 +1,31 @@
+# Raw music / playlist data
+spotify/raw/*
+!spotify/raw/.gitkeep
+
+youtube/raw/*
+!youtube/raw/.gitkeep
+
+# Local tools / binaries
+tools/
+
+# Backup files
+*.bak
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Julia / editor temp files
+*.tmp
+*.log
+
+# VS Code local settings
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Secrets / local environment
+.env
+.env.*
