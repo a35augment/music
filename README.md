@@ -358,6 +358,6 @@ That document is provided as an informational summary. The license files and not
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT Modern Variant.
 
 See [LICENSE](LICENSE) for the complete license terms.
