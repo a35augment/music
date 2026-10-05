@@ -20,7 +20,23 @@ include(
     joinpath(
         @__DIR__,
         "core",
+        "parser.jl"
+    )
+)
+
+include(
+    joinpath(
+        @__DIR__,
+        "core",
         "service_registry.jl"
+    )
+)
+
+include(
+    joinpath(
+        @__DIR__,
+        "core",
+        "resolver.jl"
     )
 )
 
@@ -62,125 +78,37 @@ const PROJECT_ROOT = normpath(
 
 
 # ============================================================
-# INPUT DETECTION
-# ============================================================
-
-function is_url(value)
-
-    cleaned_value = lowercase(
-        strip(value)
-    )
-
-    return startswith(
-        cleaned_value,
-        "http://"
-    ) ||
-    startswith(
-        cleaned_value,
-        "https://"
-    )
-end
-
-
-function is_filepath(value)
-
-    cleaned_value = strip(value)
-
-    return isfile(cleaned_value) ||
-           isdir(cleaned_value)
-end
-
-
-function detect_job_type(value)
-
-    if is_url(value)
-
-        return :url
-
-    elseif is_filepath(value)
-
-        return :folder
-
-    end
-
-    return :unknown
-end
-
-
-# ============================================================
 # URL MANIFEST
 # ============================================================
 
 function create_url_manifest(
     source_value,
-    source_name
+    source_name,
+    service
 )
-
-    # --------------------------------------------------------
-    # RESOLVE SERVICE
-    #
-    # Ask the registered URL services which service owns
-    # this URL.
-    #
-    # main.jl does not know about:
-    #
-    #   youtube.com
-    #   spotify.com
-    #   soundcloud.com
-    #   deezer.com
-    #
-    # That knowledge belongs to each registered service.
-    # --------------------------------------------------------
-
-    service =
-        resolve_url_service(
-            source_value
-        )
-
-
-    if service === nothing
-
-        return nothing
-    end
-
 
     # --------------------------------------------------------
     # COMPLETE SHIPPING LABEL
     #
-    # The service registration tells main which work items
-    # belong on a normal manifest for this service.
-    #
-    # We COPY the list onto the manifest.
-    #
-    # url.jl will later execute this list.
-    # url.jl does NOT change it.
+    # Service-specific manifest defaults come from the
+    # resolved service description.
     # --------------------------------------------------------
 
-    work_items =
-        copy(
-            service.work_items
-        )
+    work_items = copy(
+        service.work_items
+    )
 
-
-    # --------------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------------
 
     output_kind =
         service.output_kind
 
 
-    output_value =
-        joinpath(
-            PROJECT_ROOT,
-            String(service.name),
-            String(output_kind)
-        )
+    output_value = joinpath(
+        PROJECT_ROOT,
+        String(service.name),
+        String(output_kind)
+    )
 
-
-    # --------------------------------------------------------
-    # BUILD COMPLETE MANIFEST
-    # --------------------------------------------------------
 
     return build_manifest(
 
@@ -207,10 +135,6 @@ function create_folder_manifest(
     source_name
 )
 
-    # --------------------------------------------------------
-    # IDENTIFY LOCAL SOURCE
-    # --------------------------------------------------------
-
     source_kind =
 
         if isdir(source_value)
@@ -229,22 +153,14 @@ function create_folder_manifest(
 
 
     if source_kind == :unknown
-
         return nothing
     end
 
 
-    # --------------------------------------------------------
-    # FOLDER JOB
-    #
-    # A folder job is a top-level routing job.
-    #
-    # It does not decide URL service work items here.
-    #
-    # folder.jl will prepare individual URL inputs.
-    # Each URL input will then receive its own complete
-    # URL manifest through the normal initialization path.
-    # --------------------------------------------------------
+    # A folder job does not resolve URL services here.
+    # folder.jl can feed every discovered URL back through
+    # parse_url(...) + resolve_url_service(...), giving each
+    # URL its own normal URL manifest.
 
     return build_manifest(
 
@@ -269,14 +185,19 @@ end
 function create_manifest(
     job_type,
     source_value,
-    source_name
+    source_name;
+    service = nothing
 )
 
     if job_type == :url
 
+        service === nothing && return nothing
+
+
         return create_url_manifest(
             source_value,
-            source_name
+            source_name,
+            service
         )
 
 
@@ -286,7 +207,6 @@ function create_manifest(
             source_value,
             source_name
         )
-
     end
 
 
@@ -295,17 +215,27 @@ end
 
 
 # ============================================================
-# TOP-LEVEL DISPATCH
+# TOP-LEVEL JOB DISPATCH
+#
+# This dispatches job TYPES only.
+# It does not dispatch URL services.
 # ============================================================
 
 function dispatch_manifest(
-    manifest
+    manifest;
+    service = nothing
 )
 
     if manifest.job_type == :url
 
+        service === nothing && error(
+            "URL job has no resolved service."
+        )
+
+
         return run_url_job(
-            manifest
+            manifest,
+            service
         )
 
 
@@ -314,7 +244,6 @@ function dispatch_manifest(
         return run_folder_job(
             manifest
         )
-
     end
 
 
@@ -354,16 +283,15 @@ function main()
 
 
     # --------------------------------------------------------
-    # DETECT TOP-LEVEL JOB TYPE
+    # PARSE INPUT
     # --------------------------------------------------------
 
-    job_type =
-        detect_job_type(
-            source_value
-        )
+    parsed_input = parse_input(
+        source_value
+    )
 
 
-    if job_type == :unknown
+    if parsed_input.job_type == :unknown
 
         show_error(
             "Input was not recognized as a URL or existing file/folder path."
@@ -374,17 +302,40 @@ function main()
 
 
     # --------------------------------------------------------
+    # RESOLVE URL SERVICE
+    #
+    # main.jl knows only that URL jobs require a service.
+    # It does not know any YouTube/Spotify/etc. host rules.
+    # --------------------------------------------------------
+
+    service = nothing
+
+
+    if parsed_input.job_type == :url
+
+        service = resolve_url_service(
+            parsed_input.url
+        )
+
+
+        if service === nothing
+
+            show_error(
+                "No supported service owns URL host: $(parsed_input.url.host)"
+            )
+
+            return nothing
+        end
+    end
+
+
+    # --------------------------------------------------------
     # HUMAN-READABLE NAME
-    #
-    # This only fills:
-    #
-    # SOURCE
-    #   name: ...
     # --------------------------------------------------------
 
     source_name =
         prompt_source_name(
-            job_type
+            parsed_input.job_type
         )
 
 
@@ -404,12 +355,12 @@ function main()
     # CREATE COMPLETE SHIPPING LABEL
     # --------------------------------------------------------
 
-    manifest =
-        create_manifest(
-            job_type,
-            source_value,
-            source_name
-        )
+    manifest = create_manifest(
+        parsed_input.job_type,
+        parsed_input.source_value,
+        source_name;
+        service = service
+    )
 
 
     if manifest === nothing
@@ -434,14 +385,14 @@ function main()
     # --------------------------------------------------------
     # SHIP
     #
-    # From this point forward the manifest is treated as
-    # complete and immutable.
+    # The URL service was resolved once, above.
+    # The resolved callable is passed forward directly.
     # --------------------------------------------------------
 
-    result =
-        dispatch_manifest(
-            manifest
-        )
+    result = dispatch_manifest(
+        manifest;
+        service = service
+    )
 
 
     # --------------------------------------------------------
